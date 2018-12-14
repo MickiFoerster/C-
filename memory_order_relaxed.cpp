@@ -13,7 +13,11 @@ std::atomic<int> z;
 // no guarantee that ordering is as given in writer thread. So both is possible
 // w(x)<w(y) OR w(y)<w(x) => Z=0 OR Z=1
 // 
+//
+// Atomic store operation tagged with MEMORY_ORDER_RELEASE will be synchronized
+// with atomic read operation tagged with MEMROY_ORDER_ACQUIRE.
 
+#if 0
 void write_x_then_y() {
   x.store(true, std::memory_order_relaxed);
   y.store(true, std::memory_order_relaxed);
@@ -26,6 +30,21 @@ void read_y_then_x() {
     z++; // Increment Z if X is TRUE
   }
 }
+#else
+void write_x_then_y() {
+  x.store(true, std::memory_order_relaxed);
+  y.store(true, std::memory_order_release);
+}
+// Here we introduce a synchronization point between y.store and y.load
+// with help of std::memory_order_release and std::memory_order_acquire.
+void read_y_then_x() {
+  while (!y.load(std::memory_order_acquire))
+    ; // Wait until thread sees y updated to TRUE
+  if (x.load(std::memory_order_relaxed)) {
+    z++; // Increment Z if X is TRUE
+  }
+}
+#endif
 
 int main(int argc, char* argv[])
 {
