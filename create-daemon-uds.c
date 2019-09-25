@@ -17,41 +17,52 @@
 #include <sys/types.h>
 #include <sys/un.h>
 
-#define CHANNEL_PATH "/tmp/UDSCHANNEL"
+#define CHANNEL_PATH "/tmp/ASDF"
 static const char msg[] = "Please terminate!";
+bool prgContinue = true;
 
-bool shouldTaskContinue(int channel)
+void *reader(void *argv)
 {
   char buf[32];
-  size_t n = read(channel, buf, sizeof(buf));
-  switch (n)
+  int *pchannel = (int *)argv;
+  int channel = *pchannel;
+
+  syslog(LOG_DEBUG, "reader started with connection %d", channel);
+  while (prgContinue)
   {
-  case -1:
-    switch (errno)
+    size_t n = read(channel, buf, sizeof(buf));
+    switch (n)
     {
-    case EWOULDBLOCK:
+    case -1:
+      switch (errno)
+      {
+      case EWOULDBLOCK:
+        continue;
+        break;
+      default:
+        syslog(LOG_DEBUG, "read() failed: %s", strerror(errno));
+        exit(1);
+        break;
+      }
+      break;
+    case 0:
       break;
     default:
-      perror("read() failed");
-      return false;
+      buf[n] = '\0';
+      syslog(LOG_DEBUG, "received: %s\n", buf);
+      if (strcmp(buf, msg) == 0)
+      {
+        prgContinue = false;
+      }
       break;
     }
-    break;
-  case 0:
-    break;
-  default:
-    buf[n] = '\0';
-    syslog(LOG_DEBUG, "received: %s\n", buf);
-    if (strcmp(buf, msg) == 0)
-    {
-      return false;
-    }
-    break;
   }
-  return true;
+  close(channel);
+  syslog(LOG_DEBUG, "reader stopped");
+  return NULL;
 }
 
-void task(const char *buf)
+void *listenerThread(void *argv)
 {
   const char answer[] = "Terminating";
   struct sockaddr_un addr;
@@ -59,7 +70,10 @@ void task(const char *buf)
   int rc;
   int channel;
   socklen_t addrlen;
+  char *buf = (char *)argv;
+  pthread_t tid;
 
+  syslog(LOG_DEBUG, "listener started");
   unlink(buf);
   sd = socket(PF_LOCAL, SOCK_STREAM, 0);
   if (sd < 0)
@@ -68,7 +82,9 @@ void task(const char *buf)
     exit(1);
   }
 
-syslog(LOG_DEBUG, "hello");
+  rc = fcntl(sd, F_SETFL, fcntl(sd, F_GETFL) | O_NONBLOCK);
+  assert(rc == 0);
+
   memset(&addr, 0, sizeof(addr));
   addr.sun_family = AF_LOCAL;
   strncpy(addr.sun_path, buf, sizeof(addr.sun_path));
@@ -81,7 +97,6 @@ syslog(LOG_DEBUG, "hello");
     exit(1);
   }
 
-syslog(LOG_DEBUG, "hello");
   rc = listen(sd, 1);
   if (rc < 0)
   {
@@ -90,13 +105,66 @@ syslog(LOG_DEBUG, "hello");
     exit(1);
   }
 
-  addrlen = sizeof(struct sockaddr_in);
-  channel = accept(sd, (struct sockaddr *)&addr, &addrlen);
-  rc = fcntl(channel, F_SETFL, fcntl(channel, F_GETFL) | O_NONBLOCK);
-  assert(rc == 0);
+  syslog(LOG_DEBUG, "start server loop");
+
+  while (prgContinue)
+  {
+    int client;
+    addrlen = sizeof(struct sockaddr_in);
+    syslog(LOG_DEBUG, "start accept loop");
+    while (prgContinue)
+    {
+      channel = accept(sd, (struct sockaddr *)&addr, &addrlen);
+      if (channel == -1)
+      {
+        if (errno == EWOULDBLOCK)
+          continue;
+        syslog(LOG_DEBUG, "accept() failed: %s", strerror(errno));
+        exit(1);
+      }
+      break;
+    }
+    syslog(LOG_DEBUG, "cleint accepted");
+    rc = fcntl(channel, F_SETFL, fcntl(channel, F_GETFL) | O_NONBLOCK);
+    assert(rc == 0);
+    client = channel;
+    syslog(LOG_DEBUG, "client connection %d", client);
+    rc = pthread_create(&tid, NULL, reader, &client);
+    if (rc < 0)
+    {
+      syslog(LOG_DEBUG, "could not create thread for new connection: %s", strerror(errno));
+      exit(1);
+    }
+    rc = pthread_detach(tid);
+    if (rc < 0)
+    {
+      syslog(LOG_DEBUG, "could not detach thread for new connection: %s", strerror(errno));
+      exit(1);
+    }
+  }
+  syslog(LOG_DEBUG, "listener stopped");
+}
+
+void task(char *buf)
+{
+  int rc;
+  pthread_t tid;
 
   syslog(LOG_INFO, "start task");
-  while (shouldTaskContinue(channel))
+  rc = pthread_create(&tid, NULL, listenerThread, buf);
+  if (rc < 0)
+  {
+    perror("could not create listener thread");
+    exit(1);
+  }
+  rc = pthread_detach(tid);
+  if (rc < 0)
+  {
+    perror("could not detach listener thread");
+    exit(1);
+  }
+
+  while (prgContinue)
   {
     int sleeptime = (rand() + 100000) % 1000000;
     syslog(LOG_DEBUG, "sleep for %dms\n", sleeptime / 1000);
@@ -104,12 +172,12 @@ syslog(LOG_DEBUG, "hello");
   }
 
   syslog(LOG_DEBUG, "terminating\n");
-  close(channel);
 
   exit(0);
 }
 
-void startDaemon() {
+void startDaemon()
+{
   int i;
   struct sockaddr_un addr;
   int rc;
@@ -117,21 +185,25 @@ void startDaemon() {
   char buf[256];
   pid_t pid;
 
-  snprintf(buf, 256, "%sthread%d", CHANNEL_PATH, rand());
-  fprintf(stderr, "UDS path is %s\n", buf);
-   
+  //snprintf(buf, 256, "%sthread%d", CHANNEL_PATH, rand());
+  //fprintf(stderr, "UDS path is %s\n", buf);
+
   pid = fork();
-  if (pid==-1) {
+  if (pid == -1)
+  {
     perror("fork() failed");
     exit(EXIT_FAILURE);
-  } else if (pid!=0) { // parent process
+  }
+  else if (pid != 0)
+  { // parent process
     exit(EXIT_SUCCESS);
   }
   // child process
 
   // get session leader
   rc = setsid();
-  if (rc==-1) {
+  if (rc == -1)
+  {
     perror("setsid() failed");
     exit(EXIT_FAILURE);
   }
@@ -145,8 +217,10 @@ void startDaemon() {
     action.sa_handler = SIG_IGN;
     sigemptyset(&action.sa_mask);
     action.sa_flags = 0;
-    for(i=0; i<sizeof(sigs)/sizeof(sigs[0]); ++i) {
-      if (sigaction(sigs[i], &action, NULL) < 0) {
+    for (i = 0; i < sizeof(sigs) / sizeof(sigs[0]); ++i)
+    {
+      if (sigaction(sigs[i], &action, NULL) < 0)
+      {
         perror("sigaction() failed");
         exit(EXIT_FAILURE);
       }
@@ -154,23 +228,27 @@ void startDaemon() {
   }
 
   pid = fork();
-  if (pid==-1) {
+  if (pid == -1)
+  {
     perror("fork() failed");
     exit(EXIT_FAILURE);
-  } else if (pid!=0) { // parent process
+  }
+  else if (pid != 0)
+  { // parent process
     exit(EXIT_SUCCESS);
   }
   // child process
   chdir("/");
   umask(0);
 
-  for(i=sysconf(_SC_OPEN_MAX); i>=0; --i) {
+  for (i = sysconf(_SC_OPEN_MAX); i >= 0; --i)
+  {
     close(i);
   }
 
   openlog("daemon", LOG_PID | LOG_CONS | LOG_NDELAY, LOG_LOCAL0);
   syslog(LOG_DEBUG, "daemon ready");
-  task(buf);
+  task(CHANNEL_PATH);
   syslog(LOG_DEBUG, "daemon terminates");
 }
 
