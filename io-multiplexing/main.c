@@ -1,3 +1,5 @@
+/* Example basing on https://devarea.com/linux-io-multiplexing-select-vs-poll-vs-epoll/#.XYpu3OYzYcn"
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <netinet/in.h>
