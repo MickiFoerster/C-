@@ -18,25 +18,26 @@
 #include <sys/un.h>
 
 #define CHANNEL_PATH "/tmp/ASDF"
-static const char msg[] = "Please terminate!";
-bool prgContinue = true;
+static const char msg[] = "Please terminate!\n";
+static bool prgContinue = true;
 
-void *reader(void *argv)
+static void *reader(void *argv)
 {
   char buf[32];
-  int *pchannel = (int *)argv;
-  int channel = *pchannel;
+  int channel = *((int *)argv);
 
+  free(argv);
   syslog(LOG_DEBUG, "reader started with connection %d", channel);
   while (prgContinue)
   {
-    size_t n = read(channel, buf, sizeof(buf));
+    ssize_t n = read(channel, buf, sizeof(buf));
     switch (n)
     {
     case -1:
       switch (errno)
       {
       case EWOULDBLOCK:
+        usleep(1000);
         continue;
         break;
       default:
@@ -49,10 +50,13 @@ void *reader(void *argv)
       break;
     default:
       buf[n] = '\0';
-      syslog(LOG_DEBUG, "received: %s\n", buf);
+      syslog(LOG_DEBUG, "received: %s %ld\n", buf, n);
       if (strcmp(buf, msg) == 0)
       {
         prgContinue = false;
+      } else {
+        syslog(LOG_DEBUG, "buf: %s %ld", buf, strlen(buf));
+        syslog(LOG_DEBUG, "msg: %s %ld", msg, strlen(msg));
       }
       break;
     }
@@ -62,16 +66,40 @@ void *reader(void *argv)
   return NULL;
 }
 
+void newReader(int channel) {
+    int* client;
+    int rc;
+    pthread_t tid; 
+
+    syslog(LOG_DEBUG, "client accepted");
+    rc = fcntl(channel, F_SETFL, fcntl(channel, F_GETFL) | O_NONBLOCK);
+    assert(rc == 0);
+    client = (int*)malloc(sizeof(int));
+    assert(client);
+    *client = channel;
+    syslog(LOG_DEBUG, "client connection %d", *client);
+    rc = pthread_create(&tid, NULL, reader, client);
+    if (rc < 0)
+    {
+      syslog(LOG_DEBUG, "could not create thread for new connection: %s", strerror(errno));
+      exit(1);
+    }
+    rc = pthread_detach(tid);
+    if (rc < 0)
+    {
+      syslog(LOG_DEBUG, "could not detach thread for new connection: %s", strerror(errno));
+      exit(1);
+    }
+}
+
 void *listenerThread(void *argv)
 {
-  const char answer[] = "Terminating";
   struct sockaddr_un addr;
   int sd;
   int rc;
   int channel;
   socklen_t addrlen;
   char *buf = (char *)argv;
-  pthread_t tid;
 
   syslog(LOG_DEBUG, "listener started");
   unlink(buf);
@@ -109,7 +137,6 @@ void *listenerThread(void *argv)
 
   while (prgContinue)
   {
-    int client;
     addrlen = sizeof(struct sockaddr_in);
     syslog(LOG_DEBUG, "start accept loop");
     while (prgContinue)
@@ -117,32 +144,23 @@ void *listenerThread(void *argv)
       channel = accept(sd, (struct sockaddr *)&addr, &addrlen);
       if (channel == -1)
       {
-        if (errno == EWOULDBLOCK)
+        if (errno == EWOULDBLOCK) {
+          usleep(1000);
           continue;
+        }
         syslog(LOG_DEBUG, "accept() failed: %s", strerror(errno));
         exit(1);
       }
       break;
     }
-    syslog(LOG_DEBUG, "cleint accepted");
-    rc = fcntl(channel, F_SETFL, fcntl(channel, F_GETFL) | O_NONBLOCK);
-    assert(rc == 0);
-    client = channel;
-    syslog(LOG_DEBUG, "client connection %d", client);
-    rc = pthread_create(&tid, NULL, reader, &client);
-    if (rc < 0)
-    {
-      syslog(LOG_DEBUG, "could not create thread for new connection: %s", strerror(errno));
-      exit(1);
-    }
-    rc = pthread_detach(tid);
-    if (rc < 0)
-    {
-      syslog(LOG_DEBUG, "could not detach thread for new connection: %s", strerror(errno));
-      exit(1);
+
+    if (prgContinue) {
+      newReader(channel);
     }
   }
   syslog(LOG_DEBUG, "listener stopped");
+
+  return NULL;
 }
 
 void task(char *buf)
@@ -166,7 +184,7 @@ void task(char *buf)
 
   while (prgContinue)
   {
-    int sleeptime = (rand() + 100000) % 1000000;
+    int sleeptime = (rand() % 10000000) + 1000000;
     syslog(LOG_DEBUG, "sleep for %dms\n", sleeptime / 1000);
     usleep(sleeptime);
   }
@@ -179,10 +197,8 @@ void task(char *buf)
 void startDaemon()
 {
   int i;
-  struct sockaddr_un addr;
   int rc;
-  int client;
-  char buf[256];
+  //char buf[256];
   pid_t pid;
 
   //snprintf(buf, 256, "%sthread%d", CHANNEL_PATH, rand());
