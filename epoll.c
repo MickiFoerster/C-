@@ -33,7 +33,7 @@ void *epoll(void *argv) {
 
   while (running) {
     printf("\nPolling for input...\n");
-    event_count = epoll_wait(epoll_fd, events, MAX_EVENTS, 30000);
+    event_count = epoll_wait(epoll_fd, events, MAX_EVENTS, 1000);
     printf("%d ready events\n", event_count);
     for (i = 0; i < event_count; i++) {
       printf("Reading file descriptor '%d' -- ", events[i].data.fd);
