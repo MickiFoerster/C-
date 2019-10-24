@@ -24,6 +24,7 @@ static bool prgContinue = true;
 
 static void *reader(void *argv) {
   char buf[32];
+  struct epoll_event events[5];
   int channel = *((int *)argv);
   int rc;
   int epoll_fd = 0;
