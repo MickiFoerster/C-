@@ -87,9 +87,8 @@ int main(int argc, char *argv[])
                                              LIBSSH2_KNOWNHOST_KEYENC_RAW,
                                              &host);
         fprintf(stderr, "Host check: %d, key: %s\n", check,
-                (check <= LIBSSH2_KNOWNHOST_CHECK_MISMATCH)?
-                host->key:"<none>");
-
+                (check <= LIBSSH2_KNOWNHOST_CHECK_MISMATCH) ? host->key
+                                                            : "<none>");
         switch (check) {
         case LIBSSH2_KNOWNHOST_CHECK_MATCH:
           break;
