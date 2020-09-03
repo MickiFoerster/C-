@@ -1,17 +1,18 @@
 #include <libssh2.h>
- 
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <sys/select.h>
-#include <unistd.h>
+
 #include <arpa/inet.h>
+#include <assert.h>
+#include <ctype.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <netinet/in.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/select.h>
+#include <sys/socket.h>
 #include <sys/time.h>
 #include <sys/types.h>
-#include <stdlib.h>
-#include <fcntl.h>
-#include <errno.h>
-#include <stdio.h>
-#include <ctype.h>
+#include <unistd.h>
 
 static int waitsocket(int socket_fd, LIBSSH2_SESSION *session);
 
@@ -75,12 +76,21 @@ int main(int argc, char *argv[])
       fprintf(stderr, "libssh2_knownhost_init() failed\n");
       goto fatalerror;
     }
-    libssh2_knownhost_readfile(nh, "known_hosts",
-                               LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+
+    char known_host_file[256];
+    sprintf(known_host_file, "/home/%s/.ssh/known_hosts", getenv("USER"));
+    rc = libssh2_knownhost_readfile(nh, known_host_file,
+                                    LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+    if (rc <= 0) {
+      fprintf(stderr, "error: reading known host file error %d\n", rc);
+      goto fatalerror;
+    }
+    assert(rc > 0);
 
     fingerprint = libssh2_session_hostkey(session, &len, &type);
     if(fingerprint) {
         struct libssh2_knownhost *host;
+        fprintf(stderr, "checking host %s\n", hostname);
         int check = libssh2_knownhost_checkp(nh, hostname, 22,
                                              fingerprint, len,
                                              LIBSSH2_KNOWNHOST_TYPE_PLAIN|
