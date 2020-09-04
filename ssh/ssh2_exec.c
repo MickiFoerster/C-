@@ -43,7 +43,7 @@ int main(int argc, char *argv[])
     hostaddr = inet_addr(hostname);
     sock = socket(AF_INET, SOCK_STREAM, 0);
     sin.sin_family = AF_INET;
-    sin.sin_port = htons(1234);
+    sin.sin_port = htons(22);
     sin.sin_addr.s_addr = hostaddr;
     if(connect(sock, (struct sockaddr*)(&sin),
                 sizeof(struct sockaddr_in)) != 0) {
@@ -72,27 +72,48 @@ int main(int argc, char *argv[])
               hostname);
     }
 
-    char path_to_pubkey[4096];
-    char path_to_privkey[4096];
-    snprintf(path_to_pubkey, sizeof(path_to_pubkey), "%s%s", getenv("HOME"),
-             "/.ssh/id_rsa.pub");
-    snprintf(path_to_privkey, sizeof(path_to_privkey), "%s%s", getenv("HOME"),
-             "/.ssh/id_rsa");
-    fprintf(stderr, "DEBUG: %s\n%s\n", path_to_pubkey, path_to_privkey);
-    while ((rc = libssh2_userauth_publickey_fromfile(
-                session, "pi", path_to_pubkey, path_to_privkey, "")) ==
-           LIBSSH2_ERROR_EAGAIN)
-      ;
-    if (rc) {
-      fprintf(stderr, "\tAuthentication by public key failed: %d\n", rc);
-      goto shutdown;
+    LIBSSH2_AGENT *agent = NULL;
+    struct libssh2_agent_publickey *identity, *prev_identity = NULL;
+    agent = libssh2_agent_init(session);
+    assert(agent);
+
+    rc = libssh2_agent_connect(agent);
+    assert(rc == 0);
+
+    rc = libssh2_agent_list_identities(agent);
+    assert(rc == 0);
+
+    for (;;) {
+      rc = libssh2_agent_get_identity(agent, &identity, prev_identity);
+      if (rc == 1)
+        break;
+      if (rc < 0) {
+        fprintf(stderr, "Failure obtaining identity from ssh-agent support\n");
+        exit(1);
+      }
+      const char username[] = "pi";
+      while (libssh2_agent_userauth(agent, username, identity) ==
+             LIBSSH2_ERROR_EAGAIN)
+        ;
+      if (rc) {
+        fprintf(stderr,
+                "\tAuthentication with username %s and "
+                "public key %s failed! (%d)\n",
+                username, identity->comment, rc);
+      } else {
+        fprintf(stderr,
+                "\tAuthentication with username %s and "
+                "public key %s succeeded! (%d)\n",
+                username, identity->comment, rc);
+        break;
+      }
+      prev_identity = identity;
     }
+    assert(rc == 0);
 
     /* Exec non-blocking on the remove host */
     while ((channel = libssh2_channel_open_session(session)) == NULL &&
-
            libssh2_session_last_error(session, NULL, NULL, 0) ==
-
                LIBSSH2_ERROR_EAGAIN) {
       waitsocket(sock, session);
     }
@@ -159,15 +180,16 @@ int main(int argc, char *argv[])
 
     channel = NULL;
 
-shutdown:
-  libssh2_session_disconnect(session, "Normal Shutdown, Thank you for playing");
-  libssh2_session_free(session);
-  close(sock);
-  fprintf(stderr, "all done\n");
+    // shutdown:
+    libssh2_session_disconnect(session,
+                               "Normal Shutdown, Thank you for playing");
+    libssh2_session_free(session);
+    close(sock);
+    fprintf(stderr, "all done\n");
 
-  libssh2_exit();
+    libssh2_exit();
 
-  return 0;
+    return 0;
 
 fatalerror:
   close(sock);
