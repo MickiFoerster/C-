@@ -1,11 +1,11 @@
-#include <libssh2.h>
-
 #include <arpa/inet.h>
 #include <assert.h>
 #include <ctype.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <libssh2.h>
 #include <netinet/in.h>
+#include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/select.h>
@@ -15,26 +15,21 @@
 #include <unistd.h>
 
 static int waitsocket(int socket_fd, LIBSSH2_SESSION *session);
+static bool is_host_known(LIBSSH2_SESSION *session, const char *hostname);
 
 int main(int argc, char *argv[])
 {
     const char *hostname = "127.0.0.1";
     const char *commandline = "uptime";
-    const char *username    = "user";
-    const char *password    = "password";
     unsigned long hostaddr;
     int sock = -1;
     struct sockaddr_in sin;
-    const char *fingerprint;
     LIBSSH2_SESSION *session;
     LIBSSH2_CHANNEL *channel;
     int rc;
     int exitcode;
     char *exitsignal = (char *)"none";
     int bytecount = 0;
-    size_t len;
-    LIBSSH2_KNOWNHOSTS *nh;
-    int type;
 
     if (argc > 1) /* must be ip address only */
       hostname = argv[1];
@@ -48,7 +43,7 @@ int main(int argc, char *argv[])
     hostaddr = inet_addr(hostname);
     sock = socket(AF_INET, SOCK_STREAM, 0);
     sin.sin_family = AF_INET;
-    sin.sin_port = htons(22);
+    sin.sin_port = htons(1234);
     sin.sin_addr.s_addr = hostaddr;
     if(connect(sock, (struct sockaddr*)(&sin),
                 sizeof(struct sockaddr_in)) != 0) {
@@ -70,148 +65,109 @@ int main(int argc, char *argv[])
         fprintf(stderr, "Failure establishing SSH session: %d\n", rc);
         goto fatalerror;
     }
- 
-    nh = libssh2_knownhost_init(session);
-    if (!nh) {
-      fprintf(stderr, "libssh2_knownhost_init() failed\n");
-      goto fatalerror;
+
+    if (!is_host_known(session, hostname)) {
+      fprintf(stderr,
+              "warning: host %s is NOT known or hostkey does not match\n",
+              hostname);
     }
 
-    char known_host_file[256];
-    sprintf(known_host_file, "/home/%s/.ssh/known_hosts", getenv("USER"));
-    rc = libssh2_knownhost_readfile(nh, known_host_file,
-                                    LIBSSH2_KNOWNHOST_FILE_OPENSSH);
-    if (rc <= 0) {
-      fprintf(stderr, "error: reading known host file error %d\n", rc);
-      goto fatalerror;
-    }
-    assert(rc > 0);
-
-    fingerprint = libssh2_session_hostkey(session, &len, &type);
-    if(fingerprint) {
-        struct libssh2_knownhost *host;
-        fprintf(stderr, "checking host %s\n", hostname);
-        int check = libssh2_knownhost_checkp(nh, hostname, 22,
-                                             fingerprint, len,
-                                             LIBSSH2_KNOWNHOST_TYPE_PLAIN|
-                                             LIBSSH2_KNOWNHOST_KEYENC_RAW,
-                                             &host);
-        fprintf(stderr, "Host check: %d, key: %s\n", check,
-                (check <= LIBSSH2_KNOWNHOST_CHECK_MISMATCH) ? host->key
-                                                            : "<none>");
-        switch (check) {
-        case LIBSSH2_KNOWNHOST_CHECK_MATCH:
-          break;
-        case LIBSSH2_KNOWNHOST_CHECK_FAILURE:
-        case LIBSSH2_KNOWNHOST_CHECK_NOTFOUND:
-        case LIBSSH2_KNOWNHOST_CHECK_MISMATCH:
-          fprintf(stderr, "error: host is not known\n");
-          goto fatalerror;
-        }
-    }
-    else {
-      fprintf(stderr, "error: libssh2_session_hostkey() failed\n");
-      goto fatalerror;
-    }
-    libssh2_knownhost_free(nh);
-
-    while ((rc = libssh2_userauth_publickey_fromfile(session, getenv("USER"),
-                                                     "/home/user/"
-                                                     ".ssh/id_rsa.pub",
-                                                     "/home/user/"
-                                                     ".ssh/id_rsa",
-                                                     password)) ==
+    char path_to_pubkey[4096];
+    char path_to_privkey[4096];
+    snprintf(path_to_pubkey, sizeof(path_to_pubkey), "%s%s", getenv("HOME"),
+             "/.ssh/id_rsa.pub");
+    snprintf(path_to_privkey, sizeof(path_to_privkey), "%s%s", getenv("HOME"),
+             "/.ssh/id_rsa");
+    fprintf(stderr, "DEBUG: %s\n%s\n", path_to_pubkey, path_to_privkey);
+    while ((rc = libssh2_userauth_publickey_fromfile(
+                session, "pi", path_to_pubkey, path_to_privkey, "")) ==
            LIBSSH2_ERROR_EAGAIN)
       ;
     if (rc) {
-      fprintf(stderr, "\tAuthentication by public key failed\n");
+      fprintf(stderr, "\tAuthentication by public key failed: %d\n", rc);
       goto shutdown;
     }
 
-    /* Exec non-blocking on the remove host */ 
-    while((channel = libssh2_channel_open_session(session)) == NULL &&
+    /* Exec non-blocking on the remove host */
+    while ((channel = libssh2_channel_open_session(session)) == NULL &&
 
-          libssh2_session_last_error(session, NULL, NULL, 0) ==
+           libssh2_session_last_error(session, NULL, NULL, 0) ==
 
-          LIBSSH2_ERROR_EAGAIN) {
-        waitsocket(sock, session);
+               LIBSSH2_ERROR_EAGAIN) {
+      waitsocket(sock, session);
     }
-    if(channel == NULL) {
-        fprintf(stderr, "Error\n");
-        exit(1);
+    if (channel == NULL) {
+      fprintf(stderr, "Error\n");
+      exit(1);
     }
-    while((rc = libssh2_channel_exec(channel, commandline)) ==
+    while ((rc = libssh2_channel_exec(channel, commandline)) ==
 
            LIBSSH2_ERROR_EAGAIN) {
-        waitsocket(sock, session);
+      waitsocket(sock, session);
     }
-    if(rc != 0) {
-        fprintf(stderr, "Error\n");
-        exit(1);
+    if (rc != 0) {
+      fprintf(stderr, "Error\n");
+      exit(1);
     }
-    for(;;) {
-        /* loop until we block */ 
-        int rc;
-        do {
-            char buffer[0x4000];
-            rc = libssh2_channel_read(channel, buffer, sizeof(buffer) );
+    for (;;) {
+      /* loop until we block */
+      int rc;
+      do {
+        char buffer[0x4000];
+        rc = libssh2_channel_read(channel, buffer, sizeof(buffer));
 
-            if(rc > 0) {
-                int i;
-                bytecount += rc;
-                fprintf(stderr, "We read:\n");
-                for(i = 0; i < rc; ++i)
-                    fputc(buffer[i], stderr);
-                fprintf(stderr, "\n");
-            }
-            else {
-                if(rc != LIBSSH2_ERROR_EAGAIN)
-                    /* no need to output this for the EAGAIN case */ 
-                    fprintf(stderr, "libssh2_channel_read returned %d\n", rc);
-            }
+        if (rc > 0) {
+          int i;
+          bytecount += rc;
+          fprintf(stderr, "We read:\n");
+          for (i = 0; i < rc; ++i)
+            fputc(buffer[i], stderr);
+          fprintf(stderr, "\n");
+        } else {
+          if (rc != LIBSSH2_ERROR_EAGAIN)
+            /* no need to output this for the EAGAIN case */
+            fprintf(stderr, "libssh2_channel_read returned %d\n", rc);
         }
-        while(rc > 0);
- 
-        /* this is due to blocking that would occur otherwise so we loop on
-           this condition */ 
-        if(rc == LIBSSH2_ERROR_EAGAIN) {
-            waitsocket(sock, session);
-        }
-        else
-            break;
+      } while (rc > 0);
+
+      /* this is due to blocking that would occur otherwise so we loop on
+         this condition */
+      if (rc == LIBSSH2_ERROR_EAGAIN) {
+        waitsocket(sock, session);
+      } else
+        break;
     }
     exitcode = 127;
-    while((rc = libssh2_channel_close(channel)) == LIBSSH2_ERROR_EAGAIN)
+    while ((rc = libssh2_channel_close(channel)) == LIBSSH2_ERROR_EAGAIN)
 
-        waitsocket(sock, session);
- 
-    if(rc == 0) {
-        exitcode = libssh2_channel_get_exit_status(channel);
+      waitsocket(sock, session);
 
-        libssh2_channel_get_exit_signal(channel, &exitsignal,
+    if (rc == 0) {
+      exitcode = libssh2_channel_get_exit_status(channel);
 
-                                        NULL, NULL, NULL, NULL, NULL);
+      libssh2_channel_get_exit_signal(channel, &exitsignal,
+
+                                      NULL, NULL, NULL, NULL, NULL);
     }
- 
-    if(exitsignal)
-        fprintf(stderr, "\nGot signal: %s\n", exitsignal);
+
+    if (exitsignal)
+      fprintf(stderr, "\nGot signal: %s\n", exitsignal);
     else
-        fprintf(stderr, "\nEXIT: %d bytecount: %d\n", exitcode, bytecount);
- 
+      fprintf(stderr, "\nEXIT: %d bytecount: %d\n", exitcode, bytecount);
+
     libssh2_channel_free(channel);
 
     channel = NULL;
- 
-shutdown:
-    libssh2_session_disconnect(session,
-                               "Normal Shutdown, Thank you for playing");
-    libssh2_session_free(session);
-    close(sock);
-    fprintf(stderr, "all done\n");
- 
-    libssh2_exit();
 
-    return 0;
+shutdown:
+  libssh2_session_disconnect(session, "Normal Shutdown, Thank you for playing");
+  libssh2_session_free(session);
+  close(sock);
+  fprintf(stderr, "all done\n");
+
+  libssh2_exit();
+
+  return 0;
 
 fatalerror:
   close(sock);
@@ -243,3 +199,50 @@ static int waitsocket(int socket_fd, LIBSSH2_SESSION *session) {
 
   return rc;
 }
+
+static bool is_host_known(LIBSSH2_SESSION *session, const char *hostname) {
+  LIBSSH2_KNOWNHOSTS *nh;
+  nh = libssh2_knownhost_init(session);
+  if (!nh) {
+    fprintf(stderr, "libssh2_knownhost_init() failed\n");
+    return false;
+  }
+
+  char known_host_file[4096];
+  const char *fingerprint;
+  snprintf(known_host_file, sizeof(known_host_file), "%s/.ssh/known_hosts",
+           getenv("HOME"));
+  int rc = libssh2_knownhost_readfile(nh, known_host_file,
+                                      LIBSSH2_KNOWNHOST_FILE_OPENSSH);
+  if (rc <= 0) {
+    fprintf(stderr, "error: reading known host file error %d\n", rc);
+    libssh2_knownhost_free(nh);
+    return false;
+  }
+
+  size_t len;
+  int type;
+  fingerprint = libssh2_session_hostkey(session, &len, &type);
+  if (!fingerprint) {
+    fprintf(stderr, "error: libssh2_session_hostkey() failed\n");
+    libssh2_knownhost_free(nh);
+    return false;
+  }
+
+  struct libssh2_knownhost *host;
+  int check = libssh2_knownhost_checkp(
+      nh, hostname, 22, fingerprint, len,
+      LIBSSH2_KNOWNHOST_TYPE_PLAIN | LIBSSH2_KNOWNHOST_KEYENC_RAW, &host);
+  libssh2_knownhost_free(nh);
+
+  switch (check) {
+  case LIBSSH2_KNOWNHOST_CHECK_MATCH:
+    return true;
+  case LIBSSH2_KNOWNHOST_CHECK_FAILURE:
+  case LIBSSH2_KNOWNHOST_CHECK_NOTFOUND:
+  case LIBSSH2_KNOWNHOST_CHECK_MISMATCH:
+  default:
+    return false;
+  }
+}
+
