@@ -121,9 +121,7 @@ int main(int argc, char *argv[])
       fprintf(stderr, "Error\n");
       exit(1);
     }
-    while ((rc = libssh2_channel_exec(channel, commandline)) ==
-
-           LIBSSH2_ERROR_EAGAIN) {
+    while ((rc = libssh2_channel_exec(channel, commandline)) == LIBSSH2_ERROR_EAGAIN) {
       waitsocket(sock, session);
     }
     if (rc != 0) {
@@ -136,7 +134,6 @@ int main(int argc, char *argv[])
       do {
         char buffer[0x4000];
         rc = libssh2_channel_read(channel, buffer, sizeof(buffer));
-
         if (rc > 0) {
           int i;
           bytecount += rc;
@@ -160,14 +157,11 @@ int main(int argc, char *argv[])
     }
     exitcode = 127;
     while ((rc = libssh2_channel_close(channel)) == LIBSSH2_ERROR_EAGAIN)
-
       waitsocket(sock, session);
 
     if (rc == 0) {
       exitcode = libssh2_channel_get_exit_status(channel);
-
       libssh2_channel_get_exit_signal(channel, &exitsignal,
-
                                       NULL, NULL, NULL, NULL, NULL);
     }
 
