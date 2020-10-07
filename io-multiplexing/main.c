@@ -1,4 +1,4 @@
-/* Example basing on https://devarea.com/linux-io-multiplexing-select-vs-poll-vs-epoll/#.XYpu3OYzYcn"
+/* Example basing on https://devarea.com/linux-io-multiplexing-select-vs-poll-vs-epoll/#.XYpu3OYzYcn" */
 
 #include <arpa/inet.h>
 #include <errno.h>
