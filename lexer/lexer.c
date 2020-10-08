@@ -10,29 +10,52 @@
 
 typedef struct {
     char pattern[32];
+    int match_idx;
     void* (*handler)(void*);
 } pattern_t;
 
 const pattern_t patterns[2] = {
-    {
-        .pattern = " login: ",
-        .handler = NULL
-    },
-    {
-        .pattern = "AAAA",
-        .handler = NULL
-    }
-};
+    {.pattern = " login: ", .handler = NULL, .match_idx = 0},
+    {.pattern = "AAAA", .handler = NULL, .match_idx = 0}};
 const unsigned num_patterns = sizeof(patterns)/sizeof(patterns[0]);
 
-void lexer(void) {
-/*
-    * at least one match (first match counts)
-    * no pattern matches
-        * is enough input available or could a pattern match as soon as more bytes are available
-           -> read more until it is clear that no pattern matches
-        * enough input available -> go to next position
-*/
+int lexer(unsigned char buf, ssize_t n) {
+  /*
+      * at least one match (first match counts)
+      * no pattern matches
+          * is enough input available or could a pattern match as soon as more
+     bytes are available
+             -> read more until it is clear that no pattern matches
+          * enough input available -> go to next position
+
+
+
+ What if all patterns do not match? Then search starts from next position
+in buffer. But this is potentially from last call to lexer()
+  */
+  for (size_t i = 0; i < n; ++i) {
+    for (size_t j = 0; j < num_patterns; ++j) {
+      if (patterns[j].match_idx < 0) {
+        continue;
+      }
+      pattern_t *p = &patterns[j];
+      if (p->pattern[p->match_idx] == buf[i]) {
+        p->match_idx++;
+      } else {
+        p->match_idx = -1;
+      }
+
+      // End of pattern? => match found
+      if (p->pattern[p->match_idx] == '\0') {
+        for (size_t k = 0; k < num_patterns; ++k) {
+          patterns[k].match_idx = 0;
+        }
+        return j;
+      }
+    }
+  }
+
+  return -1;
 }
 
 typedef struct {
@@ -65,7 +88,10 @@ void *reader_task(void *argv) {
       ssize_t n = read(events[i].data.fd, buf, sizeof(buf));
       fprintf(stderr, "read() returned %ld bytes\n", n);
       if (n > 0) {
-          lexer(buf, n);
+        int match = lexer(buf, n);
+        if (match >= 0) {
+          fprintf(stderr, "Found match %s\n", patterns[match].pattern);
+        }
       }
     }
   }
