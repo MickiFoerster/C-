@@ -9,6 +9,33 @@
 #define PIPE_WRITE 1
 
 typedef struct {
+    char pattern[32];
+    void* (*handler)(void*);
+} pattern_t;
+
+const pattern_t patterns[2] = {
+    {
+        .pattern = " login: ",
+        .handler = NULL
+    },
+    {
+        .pattern = "AAAA",
+        .handler = NULL
+    }
+};
+const unsigned num_patterns = sizeof(patterns)/sizeof(patterns[0]);
+
+void lexer(void) {
+/*
+    * at least one match (first match counts)
+    * no pattern matches
+        * is enough input available or could a pattern match as soon as more bytes are available
+           -> read more until it is clear that no pattern matches
+        * enough input available -> go to next position
+*/
+}
+
+typedef struct {
   int turnoff;
   int input;
 } reader_args_t;
@@ -34,12 +61,11 @@ void *reader_task(void *argv) {
         return NULL;
       }
       fprintf(stderr, "fd %d can be read\n", events[i].data.fd);
-      char buf[4096];
+      unsigned char buf[4096];
       ssize_t n = read(events[i].data.fd, buf, sizeof(buf));
       fprintf(stderr, "read() returned %ld bytes\n", n);
       if (n > 0) {
-        buf[n] = '\0';
-        puts(buf);
+          lexer(buf, n);
       }
     }
   }
