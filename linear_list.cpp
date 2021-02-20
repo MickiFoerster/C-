@@ -1,5 +1,5 @@
+#include <cassert>
 #include <iostream>
-#include <memory>
 #include <string>
 
 class linListData {
@@ -8,49 +8,106 @@ class linListData {
 public:
   linListData(std::string _s) : s(_s) {}
   void dump(std::ostream &os) { os << s; }
+  friend class linListElement;
+  friend class linList;
 };
 
 class linList;
 class linListElement {
-  std::shared_ptr<linListData> data;
-  std::shared_ptr<linListElement> next;
+    linListData *data;
+    linListElement *next;
 
-public:
-  linListElement(std::shared_ptr<linListData> _data)
-      : data(_data), next(nullptr) {}
-  void dump(std::ostream &os) { data->dump(os); }
-  friend class linList;
+   public:
+    linListElement(linListData *_data) : data(_data), next(nullptr) {}
+    ~linListElement() { delete data; }
+    void dump(std::ostream &os) { data->dump(os); }
+    void dumptoend(std::ostream &os) {
+        linListElement *p = this;
+        while (p) {
+            std::cerr << "------------\n";
+            std::cerr << "data: " << p->data->s << "\n";
+            std::cerr << "next: " << p->next << "\n";
+            std::cerr << "------------\n";
+            p = p->next;
+        }
+        std::cerr << "End of list\n";
+    }
+
+    friend class linList;
 };
 
 class linList {
-  linListElement head;
+    linListElement head;
 
-public:
-  linList() : head(nullptr) {}
-  void addElement(std::string s) {
-    std::shared_ptr<linListData> d = std::make_shared<linListData>(s);
-    std::shared_ptr<linListElement> p = std::make_shared<linListElement>(d);
-    p->next = head.next;
-    head.next = p;
+    linListElement *reverse_worker(linListElement *p,
+                                   linListElement *new_head) {
+        linListElement *new_element = nullptr;
+        if (p->next) {
+            linListElement *predecessor = reverse_worker(p->next, new_head);
+            new_element = new linListElement(new linListData(p->data->s));
+            predecessor->next = new_element;
+            return new_element;
+        } else {
+            new_element = new linListElement(new linListData(p->data->s));
+            new_head->next = new_element;
+            return new_element;
+        }
+    }
+
+   public:
+    linList() : head(nullptr) {}
+    ~linList() {
+        linListElement *p = head.next;
+        while (p) {
+            linListElement *t = p;
+            p = p->next;
+            delete t;
+        }
+    }
+
+    void addElement(std::string s) {
+        linListElement *p = new linListElement(new linListData(s));
+        p->next = head.next;
+        head.next = p;
   }
 
+  linListElement *first() { return head.next; }
+
+  bool empty() { return first() == nullptr; }
+
   void dump(std::ostream &os) {
-    std::shared_ptr<linListElement> p = head.next;
-    while (p) {
-      p->dump(os);
-      p = p->next;
-    }
+      linListElement *p = first();
+      while (p) {
+          p->dump(os);
+          p = p->next;
+      }
+      os << "\n";
+  }
+
+  linList reverse() {
+      linList rev;
+      reverse_worker(first(), &rev.head);
+      return rev;
   }
 };
 
 int main() {
   linList l;
-  l.addElement("\n");
-  l.addElement(" Test");
-  l.addElement(" a");
-  l.addElement(" is");
+
+  std::cout << "list is empty: " << l.empty() << "\n";
   l.addElement("This");
+  l.addElement(" is");
+  l.addElement(" a");
+  l.addElement(" Test");
+  l.addElement("!\n");
+  std::cout << "list is empty: " << l.empty() << "\n";
 
   l.dump(std::cerr);
+
+  linList reversed_list = l.reverse();
+
+  std::cout << "Reversed:\n";
+  reversed_list.dump(std::cerr);
+
   return 0;
 }
