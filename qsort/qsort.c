@@ -32,12 +32,37 @@
 #define N 5
 int X[N] = {2, -1, -4, -3, 3};
 int Y[N] = {2, -2, 4, 1, -3};
+int I[N] = {0, 1, 2, 3, 4};
 
 double dist(int x, int y) { return sqrt(x * x + y * y); }
 
+int cmpfunc(const void *a, const void *b) {
+  int x1 = X[*(int *)a];
+  int y1 = Y[*(int *)a];
+  int x2 = X[*(int *)b];
+  int y2 = Y[*(int *)b];
+  double d1 = dist(x1, y1);
+  double d2 = dist(x2, y2);
+  if (d1 == d2)
+    return 0;
+  else if (d1 < d2)
+    return -1;
+  else
+    return 1;
+}
+
 int main() {
-  int i;
-  for (i = 0; i < N; ++i) {
-    printf("dist: %ld", dist(X[i], Y[i]));
-  }
+    int i;
+    for (i = 0; i < N; ++i) {
+        printf("%d. dist: %lf\n", i, dist(X[i], Y[i]));
+    }
+
+    qsort(I, N, sizeof(I[0]), cmpfunc);
+    for (i = 0; i < N; ++i) {
+        printf("I[%d]: %d\n", i, I[i]);
+    }
+    printf("sorted:\n");
+    for (i = 0; i < N; ++i) {
+        printf("%d. dist: %lf\n", i, dist(X[I[i]], Y[I[i]]));
+    }
 }
